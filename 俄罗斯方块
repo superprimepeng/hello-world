@@ -1,0 +1,442 @@
+#include <Windows.h>
+#include <ctime>
+#include <cstdlib>
+#include <cstdio>
+#include <iostream>
+
+const int Width = 12;//游戏界面的宽度
+const int Height = 22;//游戏界面的高度
+const int startX = 20;//开始绘制界面的点
+const int startY = 0;
+
+bool isChecking = false;//在算消分的时候按键是无效的
+int g_Board[Height][Width] = {0};//游戏界面的数组,数组的初始化。
+
+void DeleteRow(int row)
+{   //删除数组中某行 row >=0 && row < Height
+	for(int i = row; i > 0; --i){
+		for(int j = 0; j < Width; ++j){
+			g_Board[i][j] = g_Board[i-1][j]; //把上一行放到下一行
+		}
+	}
+   //这一循环的作用？
+	for(int j = 0; j < Width; ++j){
+		g_Board[0][j] = 0;
+    }
+}
+
+int GetRandomShape( int seed )//随机产生方块的19种形变
+{
+return time(NULL) / seed % 19;//这个函数如果是time（null）返回的则是当前时间（确切的来说这么说是不正确的，其实time返回的是从格林威治时间1970年1月1日0点0分0秒到现在的秒数，你这个程序中可以这么理解
+}
+
+//判断是否越界
+bool IsOut(int x, int y)
+{
+return x <= startX || y <= startY || x > startX + 2*Width || y > startY + Height ;//这里为什么是2*Width
+}
+
+//隐藏光标，头文件<windows.h> 
+void HideCursor() 
+{ 
+CONSOLE_CURSOR_INFO cursor_info = {1, 0}; //后边的0代表光标不可见 
+SetConsoleCursorInfo(GetStdHandle(STD_OUTPUT_HANDLE), &cursor_info); 
+} 
+
+//移动光标到固定位置
+void SetCursor(int x, int y)
+{
+COORD coord;
+coord.X = x;
+coord.Y = y;
+SetConsoleCursorPosition(GetStdHandle(STD_OUTPUT_HANDLE), coord);//是个宏,代表标准输出，可以看作显示器
+}
+
+struct Blocks
+{
+char blockShape[2];//{(char)0x88, (char)0xc0, 1}一共三种。
+int next;//旋转后的图形编号,也就数组中的下标，下一形变编号。
+};
+
+Blocks blocks[19] = 
+{
+//1000 1110 1100 0010
+//1000 1000 0100 1110
+//1100 0000 0100 0000
+//0000 0000 0000 0000
+{(char)0x88, (char)0xc0, 1},//竖着看，看1组合成的方向。
+{(char)0xe8, (char)0x00, 2},
+{(char)0xc4, (char)0x40, 3},
+{(char)0x2e, (char)0x00, 0},
+
+//0100 1000 1100 1110
+//0100 1110 1000 0010
+//1100 0000 1000 0000
+//0000 0000 0000 0000
+{(char)0x44, (char)0xc0, 5},
+{(char)0x8e, (char)0x00, 6},
+{(char)0xc8, (char)0x80, 7},
+{(char)0xe2, (char)0x00, 4},
+
+//1000 0110
+//1100 1100
+//0100 0000
+//0000 0000
+{(char)0x8c, (char)0x40, 9},
+{(char)0x6c, (char)0x00, 8},
+
+//0100 1100
+//1100 0110
+//1000 0000
+//0000 0000
+{(char)0x4c, (char)0x80, 11},
+{(char)0xc6, (char)0x00, 10},
+
+//0100 1000 1110 0100
+//1110 1100 0100 1100
+//0000 1000 0000 0100
+//0000 0000 0000 0000
+{(char)0x4e, (char)0x00, 13},
+{(char)0x8c, (char)0x80, 14},
+{(char)0xe4, (char)0x00, 15},
+{(char)0x4c, (char)0x40, 12},
+
+//1000 1111
+//1000 0000
+//1000 0000
+//1000 0000
+{(char)0x88, (char)0x88, 17},
+{(char)0xf0, (char)0x00, 16},
+//1100
+//1100
+//0000
+//0000
+{(char)0xcc, (char)0x00, 18}
+};
+
+void DrawFrame(int x, int y, int FrameWidth, int FrameHeight)
+{
+int i;
+
+for (i = 0; i < FrameWidth; ++i) 
+{
+SetCursor(x+2*i+2, y);//顶 x+2*i+2?为什么还加2呢？
+printf("%s", "*");
+
+SetCursor(x+2*i+2, y+FrameHeight+1);//底
+printf("%s", "|");
+}
+
+for (i = 0; i < FrameHeight; ++i) 
+{
+SetCursor(x, y + i + 1);//左
+printf("%s", "^");
+
+SetCursor(x + FrameWidth*2 + 2, y+i+ 1);//右
+printf("%s", "#");
+}
+
+SetCursor(x, y);
+printf("%s", "@");  //左上角
+
+SetCursor(x, y+FrameHeight+1);
+printf("%s", "$");//左下角
+
+SetCursor(x + FrameWidth*2+2, y);
+printf("%s", "%");//右上角  
+
+SetCursor(x + FrameWidth*2+2, y + FrameHeight+1);
+printf("%s", "~");//右下角
+}
+
+struct Shape
+{
+Blocks m_block;
+int m_x, m_y;//这个m_x, m_y是什么呢？坐标？
+};
+
+bool Collision(Shape& shape, int x, int y);//在x,y处开始显示方块
+
+void ShowShape(Shape& shape)
+{
+for ( int i = 0; i < 2 ; ++i)
+{
+unsigned int num = 128;//1000 0000，这个数字的作用？
+
+for (int j = 0; j < 8; ++j)
+{
+int row = i * 2 + j / 4;//？
+
+if ( shape.m_block.blockShape[i] & num )//?
+{
+SetCursor(shape.m_x + (j%4) * 2, shape.m_y + row );
+printf("%s", "*");//此处为方块字符，由于文章内容不能含有方块字符，所以用*代替
+}
+num = num >> 1;//右移一位。为什么右移一位呢？
+}
+}
+}
+
+bool CreateShape(Shape& shape, int id, int x, int y)
+{
+shape.m_block = blocks[id];//blocks[19]
+shape.m_x = x;
+shape.m_y = y;
+
+if (Collision(shape, 0, 0))//?
+{
+return false;
+}
+
+ShowShape(shape);
+
+return true;
+}
+
+//消除原来位置的方块
+void EraseShape(Shape& shape)//EraseShape
+{
+for ( int i = 0; i < 2; ++i)
+{
+unsigned int num = 128;
+
+for (int j = 0; j < 8; ++j)
+{
+int row = i * 2 + j / 4;//这个表达式？
+
+if ( shape.m_block.blockShape[i] & num )
+{
+SetCursor(shape.m_x + (j%4) * 2, shape.m_y + row );
+printf("%s", " ");
+}
+num = num >> 1;//？ 为什么要这样做。右移一位，偶数为原来的一半，奇数为减一的一半。
+}
+}
+}
+
+//判断是否碰撞,这里传入的x,y是偏移量
+bool Collision(Shape& shape, int x, int y)
+{
+for (int i = 0; i < 2; ++i)
+{
+unsigned int num = 128;
+
+for (int j = 0; j < 8; ++j)
+{
+int row = i * 2 + j / 4;
+int nx = shape.m_x + x*2 + (j%4) * 2;
+int ny = shape.m_y + y + row;
+
+if (shape.m_block.blockShape[i] & num)
+{
+//判断是否会撞到墙壁
+//判断与数组内的成员是否相撞
+if (IsOut(nx, ny))
+{
+return true;
+}
+else if (g_Board[ny-startY-1][(nx-startX-2)/2])//？
+{
+return true;
+}
+}
+
+num = num >> 1;
+}
+}
+
+return false;
+}
+
+//这里传入的x,y是偏移量
+bool ChangePositon(Shape& shape, int x, int y)
+{
+if (Collision(shape, x, y))
+{
+return false;
+}
+
+EraseShape(shape);
+
+shape.m_x += 2*x;
+shape.m_y += y;
+
+ShowShape(shape);
+
+return true;
+}
+
+void FixBoard(Shape& shape)
+{   
+//固定在游戏板上了
+isChecking = true;
+int maxY = 0;//一行全满，则删除。
+
+for ( int i = 0; i < 2; ++i)
+{
+unsigned int num = 128;
+
+for (int j = 0; j < 8; ++j)
+{
+int row = i * 2 + j / 4;
+int nx = shape.m_x + (j%4) * 2;//?
+int ny = shape.m_y + row;//?
+
+if (shape.m_block.blockShape[i] & num)
+{
+maxY = ny - startY - 1;
+g_Board[maxY][(nx-startX-2)/2] = 1;//?
+}
+
+num = num >> 1;
+}
+}
+
+//开始准备消行，只需要统计落下的最后4行
+int fullNumber = 0;
+int nextRow = maxY;
+
+for (int i = 0; i < 4; ++i)
+{
+bool flag = true;
+
+for (int j = 0; j < Width; ++j)
+{
+if (!g_Board[nextRow][j])
+{
+flag = false;
+break;
+}
+}
+
+if (flag)
+{
+++fullNumber;
+
+for (int j = 0; j < Width; ++j)
+{
+SetCursor(j*2+startX + 2, startY+nextRow+1);//?
+printf("%s", "口");
+}
+
+DeleteRow(nextRow);
+}
+else
+{
+nextRow -= 1;
+if (nextRow < 0)
+{
+break;
+}
+}
+}
+
+Sleep(100);
+
+if (fullNumber)
+{
+for (int i = 0; i < Height; ++i)
+{
+for (int j = 0; j < Width; ++j)
+{
+SetCursor(startX+j*2+2, startY+i+1);
+
+if (g_Board[i][j])//?
+{
+printf("%s", "*");//此处也是方块字符。用*代替。
+}
+else
+{
+printf("%s", "　");
+}
+}
+}
+}
+
+isChecking = false;
+}
+
+void RotateShape(Shape& shape)
+{
+Shape temp;
+temp.m_x = shape.m_x;
+temp.m_y = shape.m_y;
+temp.m_block = blocks[shape.m_block.next];
+
+if (Collision(temp, 0, 0))
+{
+return;
+}
+
+EraseShape(shape);
+shape.m_block = blocks[shape.m_block.next];
+ShowShape(shape);
+
+//return;
+}
+
+int main(void)
+{
+HideCursor();
+DrawFrame(startX, startY, Width, Height);
+
+Shape shape;
+CreateShape(shape, GetRandomShape(2), startX+8, startY+1);
+
+DWORD oldTime = ::GetTickCount();
+DWORD lastKeyDownTime = GetTickCount();
+DWORD deltaTime = 0, newTime;
+
+while (true)
+{
+newTime = ::GetTickCount();
+deltaTime += newTime - oldTime;
+oldTime = newTime;
+
+if ( deltaTime > 500 )//deltaTime下落速度。
+{
+deltaTime = 0;
+
+//如果下移失败，证明到底或者撞到已有的部分了
+if (!ChangePositon(shape, 0, 1))
+{
+FixBoard(shape);
+
+if (!CreateShape(shape, GetRandomShape(2), startX+8, startY+1))
+{
+break;
+}
+}
+}
+
+if (GetTickCount() - lastKeyDownTime >= 100) 
+{
+if (!isChecking) 
+{
+lastKeyDownTime = GetTickCount();
+
+if (GetAsyncKeyState(VK_UP)) 
+{
+RotateShape(shape);
+}
+if (GetAsyncKeyState(VK_LEFT)) 
+{
+ChangePositon(shape, -1, 0);
+}
+if (GetAsyncKeyState(VK_RIGHT)) 
+{
+ChangePositon(shape, 1, 0);
+}
+if (GetAsyncKeyState(VK_DOWN)) 
+{
+if(!ChangePositon(shape, 0, 2) )
+{
+ChangePositon(shape, 0, 1);
+}
+}
+}
+}
+}
+
+return 0;
+}  
